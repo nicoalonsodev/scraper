@@ -7,11 +7,22 @@ app = Flask(__name__)
 
 @app.route('/scrap', methods=['POST'])
 def scrap():
-    query = request.json.get('query')
-    if not query:
-        return jsonify({"error": "Falta el parámetro 'query' en el body"}), 400
+    data = request.json
+    if not data:
+        return jsonify({"error": "Falta el body"}), 400
 
-    search_term = query.strip().replace(' ', '-')
+    marca = data.get('marca', '').strip()
+    modelo = data.get('modelo', '').strip()
+    version = data.get('version', '').strip()
+    anio = data.get('anio', '').strip()
+
+    # Armar el query solo con los valores presentes
+    query_parts = [marca, modelo, version, anio]
+    search_query = ' '.join([part for part in query_parts if part])
+    if not search_query:
+        return jsonify({"error": "No se recibió ninguna palabra clave para la búsqueda"}), 400
+
+    search_term = search_query.replace(' ', '-')
     url = f'https://listado.mercadolibre.com.ar/{search_term}'
 
     try:
@@ -54,6 +65,7 @@ def scrap():
         promedio_dolares = promedio / 1.20 if promedio else 0
 
         return jsonify({
+            "query_usado": search_query,
             "resultados": resultados,
             "promedio_estimado": int(promedio),
             "promedio_minimo": int(promedio_dolares)
