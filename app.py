@@ -16,16 +16,18 @@ def scrap():
     version = data.get('version', '').strip()
     anio = data.get('anio', '').strip()
 
-    # Armar el query solo con los valores presentes
+    # Armar el query inicial con todos los valores
     query_parts = [marca, modelo, version, anio]
     search_query = ' '.join([part for part in query_parts if part])
+    
     if not search_query:
         return jsonify({"error": "No se recibió ninguna palabra clave para la búsqueda"}), 400
 
-    search_term = search_query.replace(' ', '-')
-    url = f'https://listado.mercadolibre.com.ar/{search_term}'
+    # Función para realizar la búsqueda en Mercado Libre
+    def perform_search(query):
+        search_term = query.replace(' ', '-')
+        url = f'https://listado.mercadolibre.com.ar/{search_term}'
 
-    try:
         html = requests.get(url).text
         soup = BeautifulSoup(html, 'html.parser')
         cards = soup.find_all('div', class_='andes-card')
@@ -64,15 +66,27 @@ def scrap():
         promedio = sum(precios_convertidos) / len(precios_convertidos) if precios_convertidos else 0
         promedio_dolares = promedio / 1.20 if promedio else 0
 
-        return jsonify({
-            "query_usado": search_query,
-            "resultados": resultados,
-            "promedio_estimado": int(promedio),
-            "promedio_minimo": int(promedio_dolares)
-        })
+        return resultados, promedio, promedio_dolares
 
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    # Realizamos la primera búsqueda con todos los campos
+    resultados, promedio, promedio_dolares = perform_search(search_query)
+
+    # Si no se encontraron resultados, realizamos la búsqueda sin la versión
+    if not resultados:
+        search_query_without_version = ' '.join([part for part in [marca, modelo, anio] if part])
+        if search_query_without_version:
+            resultados, promedio, promedio_dolares = perform_search(search_query_without_version)
+
+    # Si aún no se encuentran resultados, devolver un mensaje de error
+    if not resultados:
+        return jsonify({"error": "No se encontraron resultados para la búsqueda"}), 404
+
+    return jsonify({
+        "query_usado": search_query,
+        "resultados": resultados,
+        "promedio_estimado": int(promedio),
+        "promedio_minimo": int(promedio_dolares)
+    })
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
