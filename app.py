@@ -28,9 +28,21 @@ def scrap():
         search_term = query.replace(' ', '-')
         url = f'https://listado.mercadolibre.com.ar/{search_term}'
 
-        html = requests.get(url).text
+        # Agregar encabezado User-Agent para simular una solicitud desde un navegador
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+        }
+
+        response = requests.get(url, headers=headers)
+        print(f"Respuesta HTTP: {response.status_code}")  # Imprime el código de estado HTTP
+        if response.status_code != 200:
+            return [], 0, 0  # Retorna resultados vacíos si hay un error en la respuesta
+
+        html = response.text
         soup = BeautifulSoup(html, 'html.parser')
         cards = soup.find_all('div', class_='andes-card')
+
+        print(f"Cantidad de resultados encontrados: {len(cards)}")  # Imprime la cantidad de productos encontrados
 
         resultados = []
         precios_convertidos = []
@@ -42,7 +54,7 @@ def scrap():
             titulo = card.find(class_='poly-component__title')
             precio_tag = card.find(class_='andes-money-amount')
             link_tag = titulo.find('a') if titulo else None
-            link = link_tag['href'] if link_tag else None
+            link = link_tag['href'] if link_tag and 'href' in link_tag.attrs else None
 
             if titulo and precio_tag:
                 precio_str = precio_tag.text.strip()
