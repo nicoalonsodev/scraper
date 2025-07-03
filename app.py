@@ -96,8 +96,8 @@ def scrap():
     return jsonify({
         "query_usado": search_query,
         "resultados": resultados,
-        "promedio_estimado": int(promedio),
-        "promedio_minimo": int(promedio_dolares)
+        # "promedio_estimado": int(promedio),
+        # "promedio_minimo": int(promedio_dolares)
     })
 
 if __name__ == '__main__':
