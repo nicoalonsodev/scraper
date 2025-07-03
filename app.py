@@ -5,6 +5,7 @@ import os
 
 app = Flask(__name__)
 
+# Endpoint para scrapear productos de MercadoLibre por búsqueda (ya existente)
 @app.route('/scrap', methods=['POST'])
 def scrap():
     data = request.json
@@ -99,6 +100,52 @@ def scrap():
         # "promedio_estimado": int(promedio),
         # "promedio_minimo": int(promedio_dolares)
     })
+
+
+# Nuevo endpoint para scrapear una URL específica de MercadoLibre
+@app.route('/scrap_url', methods=['POST'])
+def scrap_url():
+    data = request.json
+    if not data:
+        return jsonify({"error": "Falta el body"}), 400
+
+    url = data.get('url', '').strip()
+    if not url:
+        return jsonify({"error": "No se recibió la URL"}), 400
+
+    # Agregar encabezado User-Agent para simular una solicitud desde un navegador
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+    }
+
+    try:
+        response = requests.get(url, headers=headers)
+        print(f"Respuesta HTTP: {response.status_code}")  # Verifica el código de estado HTTP
+        if response.status_code != 200:
+            return jsonify({"error": "No se pudo acceder a la URL"}), 500
+
+        html = response.text
+        soup = BeautifulSoup(html, 'html.parser')
+
+        # Extraer título, descripción y precio usando las clases proporcionadas
+        titulo = soup.find(class_='ui-pdp-title')
+        descripcion = soup.find(class_='ui-pdp-subtitle')
+        precio = soup.find(class_='andes-money-amount')
+
+        # Verificar si se encontraron los elementos
+        if not titulo or not descripcion or not precio:
+            return jsonify({"error": "No se encontraron los elementos en la página"}), 404
+
+        return jsonify({
+            "titulo": titulo.text.strip(),
+            "descripcion": descripcion.text.strip(),
+            "precio": precio.text.strip()
+        })
+
+    except Exception as e:
+        print(f"Error: {e}")
+        return jsonify({"error": str(e)}), 500
+
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
