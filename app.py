@@ -74,8 +74,9 @@ def scrap():
                     precio_str = precio_tag.text.strip()
                     precio_num = None
 
+                    # Detectar si el precio está en USD y convertirlo a ARS
                     if "US$" in precio_str:
-                        precio_num = float(precio_str.replace("US$", "").replace(".", "").replace(",", "").strip()) * 1200
+                        precio_num = float(precio_str.replace("US$", "").replace(".", "").replace(",", "").strip()) * 1210
                     elif "$" in precio_str:
                         precio_num = float(precio_str.replace("$", "").replace(".", "").replace(",", "").strip())
                     else:
