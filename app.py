@@ -5,7 +5,7 @@ import os
 
 app = Flask(__name__)
 
-# Endpoint para scrapear productos de MercadoLibre por búsqueda (ya existente)
+# Endpoint para scrapear productos de MercadoLibre por búsqueda
 @app.route('/scrap', methods=['POST'])
 def scrap():
     data = request.json
@@ -48,33 +48,50 @@ def scrap():
         resultados = []
         precios_convertidos = []
 
-        for card in cards:
-            if len(resultados) >= 5:
-                break  # solo procesar los primeros 5 resultados válidos
+        for card in cards[:15]:  # Limitar a los primeros 15 resultados
+            try:
+                titulo = card.find(class_='poly-component__title')
+                precio_tag = card.find(class_='andes-money-amount')
+                link_tag = titulo.find('a') if titulo else None
+                link = link_tag['href'] if link_tag and 'href' in link_tag.attrs else None
 
-            titulo = card.find(class_='poly-component__title')
-            precio_tag = card.find(class_='andes-money-amount')
-            link_tag = titulo.find('a') if titulo else None
-            link = link_tag['href'] if link_tag and 'href' in link_tag.attrs else None
+                # Obtener atributos adicionales desde la clase 'poly-attributes_list'
+                attributes = card.find(class_='poly-attributes_list')
+                attribute_list = attributes.find_all('li', class_='poly-attributes_list__item') if attributes else []
 
-            if titulo and precio_tag:
-                precio_str = precio_tag.text.strip()
-                precio_num = None
+                # Inicializar variables para año y kilometraje
+                year = None
+                mileage = None
 
-                if "US$" in precio_str:
-                    precio_num = float(precio_str.replace("US$", "").replace(".", "").replace(",", "").strip()) * 1200
-                elif "$" in precio_str:
-                    precio_num = float(precio_str.replace("$", "").replace(".", "").replace(",", "").strip())
-                else:
-                    continue
+                for attribute in attribute_list:
+                    text = attribute.text.strip()
+                    if "km" in text.lower():
+                        mileage = text  # Asignar el kilometraje
+                    elif any(char.isdigit() for char in text) and len(text.split()) == 1:  # Suponiendo que el año es un número único
+                        year = text  # Asignar el año
 
-                precios_convertidos.append(precio_num)
+                if titulo and precio_tag:
+                    precio_str = precio_tag.text.strip()
+                    precio_num = None
 
-                resultados.append({
-                    "titulo": titulo.text.strip(),
-                    "precio": precio_str,
-                    "link": link
-                })
+                    if "US$" in precio_str:
+                        precio_num = float(precio_str.replace("US$", "").replace(".", "").replace(",", "").strip()) * 1200
+                    elif "$" in precio_str:
+                        precio_num = float(precio_str.replace("$", "").replace(".", "").replace(",", "").strip())
+                    else:
+                        continue
+
+                    precios_convertidos.append(precio_num)
+
+                    resultados.append({
+                        "titulo": titulo.text.strip(),
+                        "precio": precio_str,
+                        "link": link,
+                        "anio": year,  # Añado el año
+                        "kilometraje": mileage  # Añado el kilometraje
+                    })
+            except Exception as e:
+                print(f"Error procesando un producto: {e}")
 
         promedio = sum(precios_convertidos) / len(precios_convertidos) if precios_convertidos else 0
         promedio_dolares = promedio / 1.20 if promedio else 0
