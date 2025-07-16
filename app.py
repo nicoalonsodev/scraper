@@ -18,6 +18,11 @@ def scrap():
     anio = data.get('anio', '').strip()
     kilometraje = data.get('kilometraje', '').strip()  # Recibimos el kilometraje
 
+    # Validación y ajuste del kilometraje
+    if kilometraje and not kilometraje.lower().endswith("km"):
+        # Si el kilometraje no contiene "km", lo añadimos
+        kilometraje = f"{kilometraje} km"
+
     # Armar el query inicial con todos los valores
     query_parts = [marca, modelo, version, anio, kilometraje]  # Incluimos version y kilometraje
     search_query = ' '.join([part for part in query_parts if part])
