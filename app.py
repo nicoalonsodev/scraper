@@ -14,11 +14,12 @@ def scrap():
 
     marca = data.get('marca', '').strip()
     modelo = data.get('modelo', '').strip()
-    version = data.get('version', '').strip()
+    version = data.get('version', '').strip()  # Recibimos la versión
     anio = data.get('anio', '').strip()
+    kilometraje = data.get('kilometraje', '').strip()  # Recibimos el kilometraje
 
     # Armar el query inicial con todos los valores
-    query_parts = [marca, modelo, version, anio]
+    query_parts = [marca, modelo, version, anio, kilometraje]  # Incluimos version y kilometraje
     search_query = ' '.join([part for part in query_parts if part])
     
     if not search_query:
@@ -89,7 +90,8 @@ def scrap():
                         "precio": precio_str,
                         "link": link,
                         "anio": year,  # Añado el año
-                        "kilometraje": mileage  # Añado el kilometraje
+                        "kilometraje": mileage,  # Añado el kilometraje
+                        "version": version  # Añado la versión
                     })
             except Exception as e:
                 print(f"Error procesando un producto: {e}")
@@ -104,7 +106,7 @@ def scrap():
 
     # Si no se encontraron resultados, realizamos la búsqueda sin la versión
     if not resultados:
-        search_query_without_version = ' '.join([part for part in [marca, modelo, anio] if part])
+        search_query_without_version = ' '.join([part for part in [marca, modelo, anio, kilometraje] if part])
         if search_query_without_version:
             resultados, promedio, promedio_dolares = perform_search(search_query_without_version)
 
