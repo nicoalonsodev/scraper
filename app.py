@@ -14,7 +14,7 @@ def scrap():
 
     marca = data.get('marca', '').strip()
     modelo = data.get('modelo', '').strip()
-    version = data.get('version', '').strip()  # Recibimos la versión
+    version = data.get('version', '').strip()  # Recibimos la versió
     anio = data.get('anio', '').strip()
     kilometraje = data.get('kilometraje', '').strip()  # Recibimos el kilometraje
 
@@ -175,3 +175,4 @@ def scrap_url():
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port, debug=True)
+
