@@ -2,6 +2,7 @@ from flask import Flask, request, jsonify
 import requests
 from bs4 import BeautifulSoup
 import os
+import re
 
 app = Flask(__name__)
 
@@ -14,7 +15,7 @@ def scrap():
 
     marca = data.get('marca', '').strip()
     modelo = data.get('modelo', '').strip()
-    version = data.get('version', '').strip()  # Recibimos la versió
+    version = data.get('version', '').strip()  # Recibimos la versión
     anio = data.get('anio', '').strip()
     kilometraje = data.get('kilometraje', '').strip()  # Recibimos el kilometraje
 
@@ -24,87 +25,146 @@ def scrap():
         kilometraje = f"{kilometraje} km"
 
     # Armar el query inicial con todos los valores
-    query_parts = [marca, modelo, version, anio, kilometraje]  # Incluimos version y kilometraje
+    query_parts = [marca, modelo, version, anio, kilometraje]  # Incluimos versión y kilometraje
     search_query = ' '.join([part for part in query_parts if part])
-    
+
     if not search_query:
         return jsonify({"error": "No se recibió ninguna palabra clave para la búsqueda"}), 400
 
-    # Función para realizar la búsqueda en Mercado Libre
+    # -------- perform_search NUEVO (más tolerante) --------
     def perform_search(query):
         search_term = query.replace(' ', '-')
         url = f'https://listado.mercadolibre.com.ar/{search_term}'
 
-        # Agregar encabezado User-Agent para simular una solicitud desde un navegador
         headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0 Safari/537.36",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "es-AR,es;q=0.9,en;q=0.8",
+            "Connection": "keep-alive",
+            "Referer": "https://listado.mercadolibre.com.ar/"
         }
 
-        response = requests.get(url, headers=headers)
-        print(f"Respuesta HTTP: {response.status_code}")  # Imprime el código de estado HTTP
-        if response.status_code != 200:
-            return [], 0, 0  # Retorna resultados vacíos si hay un error en la respuesta
+        resp = requests.get(url, headers=headers, timeout=15)
+        print("Respuesta HTTP:", resp.status_code)
+        if resp.status_code != 200:
+            return [], 0, 0
 
-        html = response.text
+        html = resp.text
         soup = BeautifulSoup(html, 'html.parser')
-        cards = soup.find_all('div', class_='andes-card')
 
-        print(f"Cantidad de resultados encontrados: {len(cards)}")  # Imprime la cantidad de productos encontrados
+        # Captura variantes de tarjetas (ML cambia clases seguido)
+        cards = soup.select(
+            "div.andes-card, li.ui-search-layout__item, div.ui-search-result__wrapper, div.poly-card"
+        )
+        print("Cantidad de resultados encontrados:", len(cards))
 
         resultados = []
         precios_convertidos = []
 
-        for card in cards[:15]:  # Limitar a los primeros 15 resultados
+        def parse_price(node_text):
+            """
+            Acepta $ 1.234.567, U$S 10.500, US$ 10.500, limpia espacios no separables.
+            Devuelve monto_en_ARS (float) o None, y el string original.
+            """
+            t = (node_text or "").replace("\xa0", " ").strip()
+
+            # USD primero (US$ o U$S)
+            m_usd = re.search(r'(?:US\$|U\$S)\s*([\d\.\,]+)', t)
+            if m_usd:
+                raw = m_usd.group(1)
+                num = re.sub(r'[^\d]', '', raw)  # quita . , espacios
+                if not num:
+                    return None, t
+                usd = float(num)
+                ars = usd * 1210  # tipo de cambio usado en tu lógica
+                return ars, t
+
+            # ARS ($ …)
+            m_ars = re.search(r'\$\s*([\d\.\,]+)', t)
+            if m_ars:
+                raw = m_ars.group(1)
+                num = re.sub(r'[^\d]', '', raw)
+                if not num:
+                    return None, t
+                ars = float(num)
+                return ars, t
+
+            return None, t
+
+        def extract_title_and_link(card):
+            # 1) tu selector original
+            t = card.find(class_="poly-component__title")
+            if t and t.get_text(strip=True):
+                a = t.find('a')
+                href = a['href'] if a and a.has_attr('href') else None
+                return t.get_text(strip=True), href
+
+            # 2) variantes comunes de listado
+            a = card.select_one("a.ui-search-result__content-wrapper, a.ui-search-link")
+            if a and a.get_text(strip=True):
+                return a.get_text(strip=True), (a['href'] if a.has_attr('href') else None)
+
+            # 3) fallback genérico
+            a2 = card.find('a', href=True)
+            if a2 and a2.get_text(strip=True):
+                return a2.get_text(strip=True), a2['href']
+
+            return None, None
+
+        def extract_year_km(card):
+            text = card.get_text(" ", strip=True)
+            year = None
+            km = None
+            my = re.search(r'\b(19|20)\d{2}\b', text)
+            if my:
+                year = my.group(0)
+            mk = re.search(r'([\d\.\,]+)\s*km\b', text, re.I)
+            if mk:
+                km = mk.group(0)
+            return year, km
+
+        for idx, card in enumerate(cards[:15]):  # Limitar a los primeros 15 resultados
             try:
-                titulo = card.find(class_='poly-component__title')
-                precio_tag = card.find(class_='andes-money-amount')
-                link_tag = titulo.find('a') if titulo else None
-                link = link_tag['href'] if link_tag and 'href' in link_tag.attrs else None
+                title, link = extract_title_and_link(card)
 
-                # Obtener atributos adicionales desde la clase 'poly-attributes_list'
-                attributes = card.find(class_='poly-attributes_list')
-                attribute_list = attributes.find_all('li', class_='poly-attributes_list__item') if attributes else []
+                # Precio: buscar contenedor y luego texto, con fallback a fracciones separadas
+                price_node = card.find(class_="andes-money-amount")
+                price_text = price_node.get_text(" ", strip=True) if price_node else None
+                if not price_text:
+                    symbol = card.select_one(".andes-money-amount__currency-symbol")
+                    fraction = card.select_one(".andes-money-amount__fraction")
+                    if fraction:
+                        price_text = f"{symbol.get_text(strip=True) if symbol else '$'} {fraction.get_text(strip=True)}"
 
-                # Inicializar variables para año y kilometraje
-                year = None
-                mileage = None
+                if not title or not price_text:
+                    print(f"[DESCARTADO {idx}] sin título o precio. title={bool(title)} price_text={price_text}")
+                    continue
 
-                for attribute in attribute_list:
-                    text = attribute.text.strip()
-                    if "km" in text.lower():
-                        mileage = text  # Asignar el kilometraje
-                    elif any(char.isdigit() for char in text) and len(text.split()) == 1:  # Suponiendo que el año es un número único
-                        year = text  # Asignar el año
+                monto_ars, precio_str = parse_price(price_text)
+                if monto_ars is None:
+                    print(f"[DESCARTADO {idx}] no se pudo parsear precio: {price_text}")
+                    continue
 
-                if titulo and precio_tag:
-                    precio_str = precio_tag.text.strip()
-                    precio_num = None
+                year, mileage = extract_year_km(card)
 
-                    # Detectar si el precio está en USD y convertirlo a ARS
-                    if "US$" in precio_str:
-                        precio_num = float(precio_str.replace("US$", "").replace(".", "").replace(",", "").strip()) * 1210
-                    elif "$" in precio_str:
-                        precio_num = float(precio_str.replace("$", "").replace(".", "").replace(",", "").strip())
-                    else:
-                        continue
+                precios_convertidos.append(monto_ars)
+                resultados.append({
+                    "titulo": title,
+                    "precio": precio_str,
+                    "link": link,
+                    "anio": year,
+                    "kilometraje": mileage,
+                    "version": version
+                })
 
-                    precios_convertidos.append(precio_num)
-
-                    resultados.append({
-                        "titulo": titulo.text.strip(),
-                        "precio": precio_str,
-                        "link": link,
-                        "anio": year,  # Añado el año
-                        "kilometraje": mileage,  # Añado el kilometraje
-                        "version": version  # Añado la versión
-                    })
             except Exception as e:
-                print(f"Error procesando un producto: {e}")
+                print(f"[ERROR {idx}] procesando producto: {e}")
 
         promedio = sum(precios_convertidos) / len(precios_convertidos) if precios_convertidos else 0
-        promedio_dolares = promedio / 1.20 if promedio else 0
+        promedio_dolares = (promedio / 1210) if promedio else 0  # conversión inversa correcta
 
         return resultados, promedio, promedio_dolares
+    # -------- fin perform_search NUEVO --------
 
     # Realizamos la primera búsqueda con todos los campos
     resultados, promedio, promedio_dolares = perform_search(search_query)
@@ -122,8 +182,8 @@ def scrap():
     return jsonify({
         "query_usado": search_query,
         "resultados": resultados,
-        # "promedio_estimado": int(promedio),
-        # "promedio_minimo": int(promedio_dolares)
+        # "promedio_estimado_ars": int(promedio) if promedio else 0,
+        # "promedio_estimado_usd": round(promedio_dolares, 2) if promedio_dolares else 0.0
     })
 
 
@@ -138,13 +198,16 @@ def scrap_url():
     if not url:
         return jsonify({"error": "No se recibió la URL"}), 400
 
-    # Agregar encabezado User-Agent para simular una solicitud desde un navegador
     headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "es-AR,es;q=0.9,en;q=0.8",
+        "Connection": "keep-alive",
+        "Referer": "https://www.mercadolibre.com.ar/"
     }
 
     try:
-        response = requests.get(url, headers=headers)
+        response = requests.get(url, headers=headers, timeout=15)
         print(f"Respuesta HTTP: {response.status_code}")  # Verifica el código de estado HTTP
         if response.status_code != 200:
             return jsonify({"error": "No se pudo acceder a la URL"}), 500
@@ -152,19 +215,25 @@ def scrap_url():
         html = response.text
         soup = BeautifulSoup(html, 'html.parser')
 
-        # Extraer título, descripción y precio usando las clases proporcionadas
+        # Extraer título, descripción y precio (con fallback a fracciones)
         titulo = soup.find(class_='ui-pdp-title')
         descripcion = soup.find(class_='ui-pdp-subtitle')
-        precio = soup.find(class_='andes-money-amount')
 
-        # Verificar si se encontraron los elementos
-        if not titulo or not descripcion or not precio:
+        precio_node = soup.find(class_='andes-money-amount')
+        if precio_node:
+            precio_text = precio_node.get_text(" ", strip=True)
+        else:
+            symbol = soup.select_one(".andes-money-amount__currency-symbol")
+            fraction = soup.select_one(".andes-money-amount__fraction")
+            precio_text = f"{symbol.get_text(strip=True) if symbol else '$'} {fraction.get_text(strip=True)}" if fraction else None
+
+        if not titulo or not descripcion or not precio_text:
             return jsonify({"error": "No se encontraron los elementos en la página"}), 404
 
         return jsonify({
-            "titulo": titulo.text.strip(),
-            "descripcion": descripcion.text.strip(),
-            "precio": precio.text.strip()
+            "titulo": titulo.get_text(strip=True),
+            "descripcion": descripcion.get_text(strip=True),
+            "precio": precio_text
         })
 
     except Exception as e:
@@ -175,4 +244,3 @@ def scrap_url():
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port, debug=True)
-
