@@ -5,5 +5,5 @@ urllib3==2.2.2
 gunicorn==21.2.0
 # Si vas a permitir front desde otro dominio:
 # flask-cors==5.0.0
-# Si cambiás el parser a lxml en BeautifulSoup:
+# Si cambiás el parser a lxml:
 # lxml==5.3.0

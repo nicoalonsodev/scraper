@@ -3,22 +3,20 @@ import os
 import re
 import requests
 from bs4 import BeautifulSoup
-# from flask_cors import CORS  # <- descomenta si vas a llamar desde un front en otro dominio
+# from flask_cors import CORS  # <- descomenta si lo vas a consumir desde otro dominio
 
 app = Flask(__name__)
 # CORS(app, resources={r"/*": {"origins": "*"}})  # opcional
 
-# Podés ajustar el TC por variable de entorno: ML_USD_ARS=1210
+# Tipo de cambio (configurable por env var en Railway)
 USD_ARS = float(os.environ.get("ML_USD_ARS", 1210))
 
-@app.route("/_health")
-def _health():
-    return jsonify({"ok": True})
-
-# ---------- Helpers compartidos ----------
+# -------------------- UTILIDADES --------------------
 def _parse_price(texto: str):
-    """Acepta: $ 1.234.567  |  US$ 10.500  |  U$S 10.500
-    Devuelve (monto_ARS_float, string_normalizado) o (None, original)"""
+    """
+    Acepta: $ 1.234.567  |  US$ 10.500  |  U$S 10.500
+    Devuelve (monto_ARS_float, string_mostrado) o (None, original)
+    """
     t = (texto or "").replace("\xa0", " ").strip()
 
     m_usd = re.search(r'(?:US\$|U\$S)\s*([\d\.\,]+)', t)
@@ -83,8 +81,7 @@ def _extract_price_text(card):
     if fraction:
         return f"{symbol.get_text(strip=True) if symbol else '$'} {fraction.get_text(strip=True)}"
     # 3) aria-label (variante accesible)
-    aria = card.select('[aria-label]')
-    for el in aria:
+    for el in card.select('[aria-label]'):
         val = el.get("aria-label", "")
         if re.search(r'(?:US\$|U\$S|\$)\s*[\d\.\,]+', val):
             return val
@@ -101,7 +98,70 @@ def _extract_price_text(card):
         return m.group(0)
     return None
 
+def _is_antibot_interstitial(soup: BeautifulSoup) -> bool:
+    # Señales típicas del intersticial de registro/login de ML
+    if soup.select_one('a[href*="registration?confirmation_url="]'):
+        return True
+    texto = soup.get_text(" ", strip=True).lower()
+    claves = ["soy nuevo", "ingresá", "ingresa", "iniciá sesión", "inicia sesión", "creá tu cuenta", "crea tu cuenta"]
+    return any(k in texto for k in claves)
+
+def _perform_search_api(query, limit=15, version_value=None):
+    """Fallback estable a la API pública de ML (sin OAuth para búsquedas)."""
+    try:
+        r = requests.get(
+            "https://api.mercadolibre.com/sites/MLA/search",
+            params={"q": query, "limit": limit},
+            timeout=15,
+        )
+        r.raise_for_status()
+        data = r.json()
+    except Exception as e:
+        print("[API FALLBACK] Error llamando a MLA/search:", e)
+        return [], 0, 0
+
+    resultados = []
+    precios_convertidos = []
+
+    for it in data.get("results", []):
+        title = it.get("title")
+        link = it.get("permalink")
+        currency = it.get("currency_id", "ARS")
+        price = it.get("price")
+
+        attrs = {a.get("id"): a.get("value_name") for a in it.get("attributes", []) if isinstance(a, dict)}
+        year = attrs.get("VEHICLE_YEAR") or attrs.get("YEAR")
+        km = attrs.get("KILOMETERS") or attrs.get("KILOMETER")
+
+        precio_ars_num = None
+        precio_mostrado = "N/D"
+        if price is not None:
+            if currency == "USD":
+                precio_ars_num = float(price) * USD_ARS
+                precio_mostrado = f"US$ {price}"
+            else:
+                precio_ars_num = float(price)
+                precio_mostrado = f"$ {int(price):,}".replace(",", ".")
+
+        if precio_ars_num is not None:
+            precios_convertidos.append(precio_ars_num)
+
+        resultados.append({
+            "titulo": title or "",
+            "precio": precio_mostrado,
+            "precio_ars_num": int(precio_ars_num) if precio_ars_num is not None else None,
+            "link": link,
+            "anio": year,
+            "kilometraje": km,
+            "version": version_value
+        })
+
+    promedio = sum(precios_convertidos) / len(precios_convertidos) if precios_convertidos else 0
+    promedio_dolares = (promedio / USD_ARS) if promedio else 0
+    return resultados, promedio, promedio_dolares
+
 def _perform_search(query, version_value=None):
+    """Scraping con tolerancia + detección de intersticial anti-bot."""
     search_term = query.replace(' ', '-')
     url = f'https://listado.mercadolibre.com.ar/{search_term}'
 
@@ -114,14 +174,18 @@ def _perform_search(query, version_value=None):
         "Referer": "https://listado.mercadolibre.com.ar/"
     }
 
-    resp = requests.get(url, headers=headers, timeout=15)
+    resp = requests.get(url, headers=headers, timeout=15, allow_redirects=True)
     print("Respuesta HTTP:", resp.status_code)
     if resp.status_code != 200:
         return [], 0, 0
 
     soup = BeautifulSoup(resp.text, 'html.parser')
 
-    # Variantes de cards en ML
+    # Si detecta intersticial, devolvemos vacío para forzar fallback API
+    if _is_antibot_interstitial(soup):
+        print("[ANTIBOT] Intersticial de registro detectado: activando fallback API")
+        return [], 0, 0
+
     cards = soup.select(
         "div.andes-card, li.ui-search-layout__item, div.ui-search-result__wrapper, div.poly-card"
     )
@@ -130,18 +194,22 @@ def _perform_search(query, version_value=None):
     resultados = []
     precios_convertidos = []
 
-    for idx, card in enumerate(cards[:15]):  # hasta 15 resultados
+    for idx, card in enumerate(cards[:15]):
         try:
             title, link = _extract_title_and_link(card)
             price_text = _extract_price_text(card)
 
-            if not title and not price_text:
-                print(f"[DESCARTADO {idx}] sin título ni precio en ninguna variante")
+            # Filtrar tarjetas basura/intersticial
+            if link and "registration?" in link:
+                print(f"[DESCARTADO {idx}] link a registration/intersticial")
                 continue
 
-            # Si hay título pero no precio, devolvemos igual para evitar 404
+            if not title and not price_text:
+                print(f"[DESCARTADO {idx}] sin título ni precio")
+                continue
+
             if title and not price_text:
-                print(f"[SIN PRECIO {idx}] devuelvo sin precio")
+                # Devolvemos igual (evita 404), sin precio
                 year, mileage = _extract_year_km(card)
                 resultados.append({
                     "titulo": title,
@@ -179,7 +247,11 @@ def _perform_search(query, version_value=None):
     promedio_dolares = (promedio / USD_ARS) if promedio else 0
     return resultados, promedio, promedio_dolares
 
-# ---------- Endpoints ----------
+# -------------------- ENDPOINTS --------------------
+@app.route("/_health")
+def _health():
+    return jsonify({"ok": True})
+
 @app.route('/scrap', methods=['POST'])
 def scrap():
     data = request.json
@@ -201,14 +273,20 @@ def scrap():
     if not search_query:
         return jsonify({"error": "No se recibió ninguna palabra clave para la búsqueda"}), 400
 
-    # Búsqueda 1: todo junto
+    # 1) Intento scraping
     resultados, promedio, promedio_dolares = _perform_search(search_query, version_value=version)
 
-    # Fallback: sin versión si no hubo resultados
+    # 2) Fallback a API si scraping no devolvió
     if not resultados:
+        resultados, promedio, promedio_dolares = _perform_search_api(search_query, limit=15, version_value=version)
+
+    # 3) Fallback adicional sin versión
+    if not resultados and version:
         search_query_without_version = ' '.join([part for part in [marca, modelo, anio, kilometraje] if part])
         if search_query_without_version:
             resultados, promedio, promedio_dolares = _perform_search(search_query_without_version, version_value=None)
+            if not resultados:
+                resultados, promedio, promedio_dolares = _perform_search_api(search_query_without_version, limit=15, version_value=None)
 
     if not resultados:
         return jsonify({"error": "No se encontraron resultados para la búsqueda"}), 404
@@ -250,7 +328,6 @@ def scrap_url():
         titulo = soup.find(class_='ui-pdp-title')
         descripcion = soup.find(class_='ui-pdp-subtitle')
 
-        # Precio con fallbacks
         precio_node = soup.find(class_='andes-money-amount')
         if precio_node:
             precio_text = precio_node.get_text(" ", strip=True)
