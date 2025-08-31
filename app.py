@@ -5,7 +5,7 @@ import os
 
 app = Flask(__name__)
 
-# Endpoint para scrapear productos de MercadoLibre por búsqueda
+# Endpoint para scrapear productos de MercadoLibre por búsqued
 @app.route('/scrap', methods=['POST'])
 def scrap():
     data = request.json
