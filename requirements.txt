@@ -1,18 +1,9 @@
 Flask==3.1.1
-beautifulsoup4
-selenium>=4.15.2
-requests
-
-# Flask dependencies
-Jinja2
-Werkzeug
-itsdangerous
-blinker
-
-# Optional utility libs (sin versiones fijas)
-colorama
-certifi
-charset-normalizer
-idna
-urllib3
-typing_extensions
+requests==2.32.3
+beautifulsoup4==4.12.3
+urllib3==2.2.2
+gunicorn==21.2.0
+# Si vas a permitir front desde otro dominio:
+# flask-cors==5.0.0
+# Si cambiás el parser a lxml:
+# lxml==5.3.0
